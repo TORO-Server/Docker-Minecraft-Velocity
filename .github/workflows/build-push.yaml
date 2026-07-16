@@ -1,42 +1,141 @@
-name: Release
+name: Release Velocity Docker Images
 on:
-  push:
-    tags:
-      - "v*.*.*-*"
+  schedule:
+    # 毎日 UTC 0:00 (日本時間 9:00) に実行
+    - cron: "0 0 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-push:
+  list-versions:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Generate matrix
+        id: set-matrix
+        run: |
+          MATRIX=$(python updateVelocity.py get-matrix)
+          echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+
+  build-and-push:
+    needs: list-versions
+    runs-on: ubuntu-latest
+    if: ${{ needs.list-versions.outputs.matrix != '' && toJson(fromJson(needs.list-versions.outputs.matrix).include) != '[]' }}
+    strategy:
+      matrix: ${{ fromJson(needs.list-versions.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 4
     permissions:
       packages: write
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@v2
-      - name: Setup buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login ghcr.io
-        uses: docker/login-action@v3
+        uses: actions/checkout@v7
+
+      - name: Convert image name to lowercase
+        id: prep
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Create metadata
-        id: meta
-        uses: docker/metadata-action@v5
+
+      - name: Setup python
+        uses: actions/setup-python@v6
         with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest
-            type=semver,pattern={{version}}
-            type=sha,prefix=,suffix=,format=short
-      - name: Push image
-        uses: docker/build-push-action@v5
+          python-version: "3.12"
+
+      - name: Download jarfile
+        run: |
+          python updateVelocity.py download ./docker/velocity.jar "${{ matrix.url }}" "${{ matrix.sha256 }}"
+
+      - name: Detect required Java version from jar
+        id: detect-java
+        run: |
+          JAVA_VER=$(python updateVelocity.py get-jar-version ./docker/velocity.jar)
+          echo "Detected Java version: $JAVA_VER"
+          echo "java_version=$JAVA_VER" >> $GITHUB_OUTPUT
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Setup buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Generate tag list
+        id: tags
+        run: |
+          OWNER="${{ steps.prep.outputs.owner }}"
+          TAGS="ghcr.io/${OWNER}/docker-minecraft-velocity:${{ matrix.version }}"
+          
+          if [ "${{ matrix.is_latest }}" = "true" ]; then
+            TAGS="${TAGS},ghcr.io/${OWNER}/docker-minecraft-velocity:latest"
+          fi
+          
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build local image for testing
+        uses: docker/build-push-action@v7
         with:
           file: main.dockerfile
+          context: ./docker
+          load: true
+          tags: test-image:latest
+          build-args: |
+            JAVA_VERSION=${{ steps.detect-java.outputs.java_version }}
+
+      - name: Run container test
+        run: |
+          docker run --name test-server -d test-image:latest
+          sleep 5
+          LOGS=$(docker logs test-server 2>&1)
+          echo "=== Container Logs ==="
+          echo "$LOGS"
+          echo "======================"
+          
+          if echo "$LOGS" | grep -q "Unable to access jarfile"; then
+            echo "Error: Java failed to start due to jarfile access error."
+            docker rm -f test-server
+            exit 1
+          fi
+          
+          if echo "$LOGS" | grep -iq -e "loading" -e "velocity" -e "booting"; then
+            echo "Success: Java started Velocity successfully."
+          else
+            echo "Error: Velocity initialization message not found in logs."
+            docker rm -f test-server
+            exit 1
+          fi
+          
+          docker rm -f test-server
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          file: main.dockerfile
+          context: ./docker
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            JAVA_VERSION=${{ steps.detect-java.outputs.java_version }}
+          cache-from: type=gha,scope=${{ matrix.version }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.version }}

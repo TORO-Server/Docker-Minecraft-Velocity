@@ -1,13 +1,8 @@
-FROM python:latest AS downloader-velocity
+ARG JAVA_VERSION=21
+FROM gcr.io/distroless/java${JAVA_VERSION}-debian13
 
-COPY updateVelocity.py updateVelocity.py
-
-RUN python3 updateVelocity.py ./velocity.jar
-
-FROM gcr.io/distroless/java21-debian12
-
-COPY --from=downloader-velocity velocity.jar app.jar
+COPY velocity.jar app.jar
 
 WORKDIR /app
 
-CMD ["-jar", "../app.jar"]
+CMD ["../app.jar"]
