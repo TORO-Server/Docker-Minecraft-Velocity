@@ -1,5 +1,6 @@
 ARG JAVA_VERSION=21
-FROM gcr.io/distroless/java${JAVA_VERSION}-debian13
+ARG DEBIAN_VERSION=13
+FROM gcr.io/distroless/java${JAVA_VERSION}-debian${DEBIAN_VERSION}
 
 COPY velocity.jar app.jar
 

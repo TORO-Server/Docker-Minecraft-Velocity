@@ -73,6 +73,11 @@ jobs:
           JAVA_VER=$(python updateVelocity.py get-jar-version ./docker/velocity.jar)
           echo "Detected Java version: $JAVA_VER"
           echo "java_version=$JAVA_VER" >> $GITHUB_OUTPUT
+          if [ "$JAVA_VER" -eq 11 ]; then
+            echo "debian_version=11" >> $GITHUB_OUTPUT
+          else
+            echo "debian_version=13" >> $GITHUB_OUTPUT
+          fi
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
@@ -101,6 +106,7 @@ jobs:
           tags: test-image:latest
           build-args: |
             JAVA_VERSION=${{ steps.detect-java.outputs.java_version }}
+            DEBIAN_VERSION=${{ steps.detect-java.outputs.debian_version }}
 
       - name: Run container test
         run: |
@@ -137,5 +143,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             JAVA_VERSION=${{ steps.detect-java.outputs.java_version }}
+            DEBIAN_VERSION=${{ steps.detect-java.outputs.debian_version }}
           cache-from: type=gha,scope=${{ matrix.version }}
           cache-to: type=gha,mode=max,scope=${{ matrix.version }}
