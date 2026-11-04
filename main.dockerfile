@@ -21,7 +21,7 @@ RUN set -eu; \
     # eMudhra の中間 CA の鍵が漏れた件 (JDK-8395690)。OpenJDK の案内 (https://openjdk.org/emudhra) のとおり、関係するルートを外す
     cacerts=/out/usr/lib/jvm/jre/lib/security/cacerts; \
     keytool -list -keystore "$cacerts" -storepass changeit 2>/dev/null \
-      | sed -nE 's/^(.*), [A-Za-z]+ [0-9]+, [0-9]+, trustedCertEntry,$/\1/p' \
+      | sed -nE 's/^(.*), [A-Za-z]+ [0-9]+, [0-9]+, trustedCertEntry, *$/\1/p' \
       | grep -iE 'emsign|comodoaaa|aaa ?certificate' \
       | while read -r alias; do keytool -delete -keystore "$cacerts" -storepass changeit -alias "$alias"; done; \
     if keytool -list -keystore "$cacerts" -storepass changeit | grep -iE 'emsign|comodoaaa|aaa ?certificate'; then exit 1; fi; \
