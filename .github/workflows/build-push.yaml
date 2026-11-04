@@ -1,8 +1,10 @@
 name: Release Velocity Docker Images
 on:
   schedule:
-    # 毎日 UTC 0:00 (日本時間 9:00) に実行
+    # 毎日 UTC 0:00 (日本時間 9:00): 新しいバージョンが出ていれば作る
     - cron: "0 0 * * *"
+    # 毎週月曜 UTC 1:00: 最新バージョンを作り直す (ベースイメージと JRE の修正を取り込む)
+    - cron: "0 1 * * 1"
   workflow_dispatch:
     inputs:
       rebuild_latest:
@@ -12,6 +14,15 @@ on:
   push:
     branches:
       - main
+  # プルリクエストでは、最新バージョンだけを amd64 で作って起動を確かめる (置かない)
+  pull_request:
+    paths:
+      - main.dockerfile
+      - updateVelocity.py
+      - .github/workflows/build-push.yaml
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,15 +35,16 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
       - name: Generate matrix
         id: set-matrix
         env:
-          FORCE_REBUILD_LATEST: ${{ inputs.rebuild_latest }}
+          FORCE_REBUILD_LATEST: ${{ inputs.rebuild_latest || github.event.schedule == '0 1 * * 1' || github.event_name == 'pull_request' }}
+          ONLY_LATEST: ${{ github.event_name == 'pull_request' }}
         run: |
           MATRIX=$(python updateVelocity.py get-matrix)
           echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
@@ -50,29 +62,33 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Convert image name to lowercase
         id: prep
         run: |
-          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
 
       - name: Login to ghcr.io
-        uses: docker/login-action@v4
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
       - name: Download jarfile
+        env:
+          JAR_URL: ${{ matrix.url }}
+          JAR_SHA256: ${{ matrix.sha256 }}
         run: |
-          python updateVelocity.py download ./docker/velocity.jar "${{ matrix.url }}" "${{ matrix.sha256 }}"
+          python updateVelocity.py download ./docker/velocity.jar "$JAR_URL" "$JAR_SHA256"
 
       - name: Detect required Java version from jar
         id: detect-java
@@ -87,25 +103,29 @@ jobs:
           fi
 
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v4
+        if: github.event_name != 'pull_request'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
       - name: Setup buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Generate tag list
         id: tags
+        env:
+          OWNER: ${{ steps.prep.outputs.owner }}
+          VERSION: ${{ matrix.version }}
+          IS_LATEST: ${{ matrix.is_latest }}
         run: |
-          OWNER="${{ steps.prep.outputs.owner }}"
-          TAGS="ghcr.io/${OWNER}/docker-minecraft-velocity:${{ matrix.version }}"
-          
-          if [ "${{ matrix.is_latest }}" = "true" ]; then
+          TAGS="ghcr.io/${OWNER}/docker-minecraft-velocity:${VERSION}"
+
+          if [ "$IS_LATEST" = "true" ]; then
             TAGS="${TAGS},ghcr.io/${OWNER}/docker-minecraft-velocity:latest"
           fi
-          
+
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
       - name: Build local image for testing
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           file: main.dockerfile
           context: ./docker
@@ -117,37 +137,35 @@ jobs:
 
       - name: Run container test
         run: |
+          # 非 root のまま設定を作って、最後まで起動すること (モジュールやライブラリが足りないと、ここで止まる)
           docker run --name test-server -d test-image:latest
-          sleep 5
-          LOGS=$(docker logs test-server 2>&1)
+          started=false
+          for _ in $(seq 1 60); do
+            if docker logs test-server 2>&1 | grep -q 'Done ('; then started=true; break; fi
+            sleep 1
+          done
           echo "=== Container Logs ==="
-          echo "$LOGS"
+          docker logs test-server 2>&1
           echo "======================"
-          
-          if echo "$LOGS" | grep -q "Unable to access jarfile"; then
-            echo "Error: Java failed to start due to jarfile access error."
-            docker rm -f test-server
-            exit 1
-          fi
-          
-          if echo "$LOGS" | grep -iq -e "loading" -e "velocity" -e "booting"; then
-            echo "Success: Java started Velocity successfully."
-          else
-            echo "Error: Velocity initialization message not found in logs."
-            docker rm -f test-server
-            exit 1
-          fi
-          
           docker rm -f test-server
+          if [ "$started" != "true" ]; then
+            echo "Error: Velocity did not finish starting."
+            exit 1
+          fi
+
+      - name: Report image size
+        run: |
+          size=$(docker image inspect test-image:latest --format '{{.Size}}')
+          echo "Image size (amd64): $((size / 1048576)) MiB" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           file: main.dockerfile
           context: ./docker
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.tags.outputs.tags }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           build-args: |
             JAVA_VERSION=${{ steps.detect-java.outputs.java_version }}
             DEBIAN_VERSION=${{ steps.detect-java.outputs.debian_version }}
