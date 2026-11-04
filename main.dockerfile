@@ -18,6 +18,11 @@ RUN set -eu; \
     jlink --add-modules "$modules" --include-locales=en,ja --compress="$compress" \
       --strip-debug --no-man-pages --no-header-files --output /out/usr/lib/jvm/jre; \
     ln -s ../lib/jvm/jre/bin/java /out/usr/bin/java; \
+    # eMudhra の中間 CA の鍵が漏れた件 (JDK-8395690)。OpenJDK の案内 (https://openjdk.org/emudhra) のとおり、関係するルートを外す
+    cacerts=/out/usr/lib/jvm/jre/lib/security/cacerts; \
+    keytool -list -keystore "$cacerts" -storepass changeit 2>/dev/null \
+      | grep -iE '^(emsign|comodoaaa|aaa ?certificate)' | cut -d, -f1 \
+      | while read -r alias; do keytool -delete -keystore "$cacerts" -storepass changeit -alias "$alias"; done; \
     install -d -o 65532 -g 65532 /out/app
 
 # distroless には OpenSSL が無い。Geyser の NetherNet (libdatachannel) が libcrypto.so.3 を要求するので、
