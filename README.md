@@ -4,7 +4,7 @@ Velocity (Minecraft プロキシサーバー) の最小限の Docker イメー�
 
 ## 特徴
 - **自動ビルド & パブリッシュ**: GitHub Actions を利用し、毎日 Velocity の新規ビルドを自動的に検出して GHCR (GitHub Container Registry) にパブリッシュする。
-- **軽量・安全なイメージ**: ベースイメージに Google の `distroless/java` を使用しており、シェルすら含まれない最小限かつセキュアな構成。
+- **軽量・安全なイメージ**: ベースイメージは Google の `distroless/java-base` (シェルすら含まれない)。Java の実行環境は `jlink` で作り (モジュールは Temurin の JRE と同じ)、既定は非 root (65532) で動く。
 - **Java バージョンの自動追従**: Velocity の jar ファイルを解析し、必要な Java バージョン (Java 21 等) を自動的に検出して Docker ベースイメージを切り替える。
 - **マルチプラットフォーム対応**: `linux/amd64` および `linux/arm64` アーキテクチャに対応。
 
@@ -32,6 +32,7 @@ mkdir data
 
 ```bash
 docker run -d \
+  --user "$(id -u):$(id -g)" \
   -p 25577:25577 \
   -v $(pwd)/data:/app \
   --name velocity-proxy \

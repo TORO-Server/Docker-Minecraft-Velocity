@@ -148,6 +148,8 @@ def get_matrix():
         for build_info in builds_info:
             build_info['is_latest'] = (build_info['tag'] == latest_build_tag)
             
+            if os.environ.get('ONLY_LATEST') == 'true' and not build_info['is_latest']:
+                continue
             force = build_info['is_latest'] and os.environ.get('FORCE_REBUILD_LATEST') == 'true'
             if build_info['tag'] in existing_tags and not force:
                 sys.stderr.write(f"Skipping version {v} because it already exists on GHCR.\n")
