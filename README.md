@@ -14,7 +14,7 @@ Velocity (Minecraft プロキシサーバー) の最小限の Docker イメー�
 - **全体最新タグ (Velocity の最新ビルド時のみ)**: `latest`
 
 > [!NOTE]
-> 現在のスクリプトの設定により、Velocity `3.0.0` 以上のバージョンが自動ビルドおよびパブリッシュの対象となっている。
+> 自動ビルドの対象は、メジャーバージョンが 3 以上の Velocity です。対象の条件の正本は `updateVelocity.py` です。
 
 ## 使い方
 
