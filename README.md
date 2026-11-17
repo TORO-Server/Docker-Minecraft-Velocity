@@ -42,7 +42,7 @@ docker run -d \
 ## 構成スクリプト
 
 ### [updateVelocity.py](/updateVelocity.py)
-GitHub Actions ワークフローでビルドプロセスを制御するための多機能 Python スクリプト。
+GitHub Actions 自動処理でビルドプロセスを制御するための多機能 Python スクリプト。
 
 #### コマンドラインの使用方法
 - **ビルド対象マトリックスの取得**
